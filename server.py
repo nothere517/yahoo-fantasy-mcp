@@ -30,7 +30,7 @@ SPORT_CODE = "nba"
 LEAGUE_ID_RE = re.compile(r"^\d{3}\.l\.\d+$")
 TEAM_KEY_RE = re.compile(r"^\d{3}\.l\.\d+\.t\.\d+$")
 TRANSACTION_KEY_RE = re.compile(r"^\d{3}\.l\.\d+\.(tr|pt)\.\d+$")
-POSITION_RE = re.compile(r"^[A-Z]{1,4}$")
+POSITION_RE = re.compile(r"^(?:[A-Z]{1,4}|Util)$")
 STATUS_VALUES = frozenset({"A", "FA", "W", "T", "K"})
 TRAN_TYPES = frozenset({"add", "drop", "commish", "trade"})
 REQ_TYPE_VALUES = frozenset({"season", "average_season", "lastweek", "lastmonth", "date", "week"})
@@ -88,6 +88,26 @@ def sanitize_trade_note(note: str) -> str:
     # Strip control chars, limit length
     cleaned = re.sub(r"[\x00-\x1f\x7f-\x9f]", "", note)
     return cleaned[:500]
+
+
+# --- Error handling decorator ---
+def safe_tool(func):
+    """Wrapper that catches Yahoo API exceptions and returns safe error messages."""
+    def wrapper(*args, **kwargs):
+        try:
+            return func(*args, **kwargs)
+        except ValueError as e:
+            # Input validation errors — safe to return as-is
+            raise
+        except Exception as e:
+            # Catch Yahoo API errors, network errors, auth failures, etc.
+            # Return formatted error instead of raw traceback
+            error_type = type(e).__name__
+            error_msg = str(e)
+            raise RuntimeError(
+                f"{error_type}: {error_msg[:200]}"
+            ) from e
+    return wrapper
 
 
 # --- Credential management ---
@@ -189,12 +209,14 @@ mcp = FastMCP("yahoo-fantasy-basketball")
 # ---- Read-only tools ----
 
 @mcp.tool()
+@safe_tool
 def get_game_id() -> str:
     """Get the Yahoo game ID for the current NBA season."""
     return _get_game().game_id()
 
 
 @mcp.tool()
+@safe_tool
 def list_leagues(seasons: list[str] | None = None) -> list[str]:
     """List all NBA league IDs for the authenticated user.
 
@@ -208,6 +230,7 @@ def list_leagues(seasons: list[str] | None = None) -> list[str]:
 
 
 @mcp.tool()
+@safe_tool
 def get_standings(league_id: str) -> list[dict]:
     """Get league standings.
 
@@ -219,6 +242,7 @@ def get_standings(league_id: str) -> list[dict]:
 
 
 @mcp.tool()
+@safe_tool
 def get_teams(league_id: str) -> dict:
     """Get all teams in a league with their details.
 
@@ -230,6 +254,7 @@ def get_teams(league_id: str) -> dict:
 
 
 @mcp.tool()
+@safe_tool
 def find_team_by_name(league_id: str, team_name: str) -> dict | None:
     """Find a team by name in a league.
 
@@ -251,6 +276,7 @@ def find_team_by_name(league_id: str, team_name: str) -> dict | None:
 
 
 @mcp.tool()
+@safe_tool
 def get_roster(team_key: str, week: int | None = None, day: str | None = None) -> list[dict]:
     """Get a team's roster.
 
@@ -267,6 +293,7 @@ def get_roster(team_key: str, week: int | None = None, day: str | None = None) -
 
 
 @mcp.tool()
+@safe_tool
 def get_matchups(league_id: str, week: int | None = None) -> dict:
     """Get matchups for a given week. Defaults to current week.
 
@@ -279,6 +306,7 @@ def get_matchups(league_id: str, week: int | None = None) -> dict:
 
 
 @mcp.tool()
+@safe_tool
 def get_current_week(league_id: str) -> int:
     """Get the current week number for a league.
 
@@ -290,6 +318,7 @@ def get_current_week(league_id: str) -> int:
 
 
 @mcp.tool()
+@safe_tool
 def get_free_agents(league_id: str, position: str) -> list[dict]:
     """Get free agents for a given position.
 
@@ -303,6 +332,7 @@ def get_free_agents(league_id: str, position: str) -> list[dict]:
 
 
 @mcp.tool()
+@safe_tool
 def get_player_details(
     league_id: str,
     player_name: str | None = None,
@@ -327,6 +357,7 @@ def get_player_details(
 
 
 @mcp.tool()
+@safe_tool
 def get_player_stats(
     league_id: str,
     player_ids: list[int],
@@ -354,6 +385,7 @@ def get_player_stats(
 
 
 @mcp.tool()
+@safe_tool
 def get_league_settings(league_id: str) -> dict:
     """Get league settings (scoring type, roster positions, trade rules, etc.).
 
@@ -365,6 +397,7 @@ def get_league_settings(league_id: str) -> dict:
 
 
 @mcp.tool()
+@safe_tool
 def get_stat_categories(league_id: str) -> list[dict]:
     """Get the stat categories used for scoring in a league.
 
@@ -376,6 +409,7 @@ def get_stat_categories(league_id: str) -> list[dict]:
 
 
 @mcp.tool()
+@safe_tool
 def get_league_positions(league_id: str) -> dict:
     """Get the roster positions used in a league.
 
@@ -387,6 +421,7 @@ def get_league_positions(league_id: str) -> dict:
 
 
 @mcp.tool()
+@safe_tool
 def get_draft_results(league_id: str) -> list[dict]:
     """Get draft results for a league.
 
@@ -398,17 +433,18 @@ def get_draft_results(league_id: str) -> list[dict]:
 
 
 @mcp.tool()
+@safe_tool
 def get_transactions(
     league_id: str,
     tran_types: str = "add,drop,trade",
-    count: str = "25",
+    count: int = 25,
 ) -> list[dict]:
     """Get recent transactions in a league.
 
     Args:
         league_id: Yahoo league ID.
         tran_types: Comma-separated types: add,drop,commish,trade.
-        count: Number of transactions to return (as string).
+        count: Number of transactions to return.
     """
     # Validate each transaction type
     for t in tran_types.split(","):
@@ -416,10 +452,24 @@ def get_transactions(
         if t not in TRAN_TYPES:
             raise ValueError(f"Invalid transaction type: {t!r}")
     lg = _get_league(league_id)
-    return lg.transactions(tran_types, count)
+    return lg.transactions(tran_types, str(count))
 
 
 @mcp.tool()
+@safe_tool
+def get_proposed_trades(league_id: str, team_key: str) -> list[dict]:
+    """Get all proposed trades involving your team.
+
+    Args:
+        league_id: Yahoo league ID.
+        team_key: Your team key.
+    """
+    tm = _get_team(league_id, team_key)
+    return tm.proposed_trades()
+
+
+@mcp.tool()
+@safe_tool
 def get_my_team_key(league_id: str) -> str:
     """Get the team key for the authenticated user in a league.
 
@@ -431,6 +481,7 @@ def get_my_team_key(league_id: str) -> str:
 
 
 @mcp.tool()
+@safe_tool
 def get_team_details(team_key: str) -> dict:
     """Get details about a specific team.
 
@@ -444,6 +495,7 @@ def get_team_details(team_key: str) -> dict:
 
 
 @mcp.tool()
+@safe_tool
 def get_percent_owned(league_id: str, player_ids: list[int]) -> list[dict]:
     """Get ownership percentage for a list of players.
 
@@ -457,6 +509,7 @@ def get_percent_owned(league_id: str, player_ids: list[int]) -> list[dict]:
 
 
 @mcp.tool()
+@safe_tool
 def get_player_ownership(league_id: str, player_ids: list[int]) -> dict:
     """Get ownership status (which team owns each player).
 
@@ -472,6 +525,7 @@ def get_player_ownership(league_id: str, player_ids: list[int]) -> dict:
 # ---- Write tools (mutating operations) ----
 
 @mcp.tool()
+@safe_tool
 def add_player(league_id: str, team_key: str, player_id: int) -> str:
     """Add a free agent player to your team.
 
@@ -487,6 +541,7 @@ def add_player(league_id: str, team_key: str, player_id: int) -> str:
 
 
 @mcp.tool()
+@safe_tool
 def drop_player(league_id: str, team_key: str, player_id: int) -> str:
     """Drop a player from your team.
 
@@ -502,6 +557,7 @@ def drop_player(league_id: str, team_key: str, player_id: int) -> str:
 
 
 @mcp.tool()
+@safe_tool
 def add_and_drop_players(
     league_id: str,
     team_key: str,
@@ -524,6 +580,7 @@ def add_and_drop_players(
 
 
 @mcp.tool()
+@safe_tool
 def claim_player(
     league_id: str,
     team_key: str,
@@ -545,6 +602,7 @@ def claim_player(
 
 
 @mcp.tool()
+@safe_tool
 def change_positions(
     league_id: str,
     team_key: str,
@@ -570,6 +628,7 @@ def change_positions(
 
 
 @mcp.tool()
+@safe_tool
 def propose_trade(
     league_id: str,
     team_key: str,
@@ -596,6 +655,7 @@ def propose_trade(
 
 
 @mcp.tool()
+@safe_tool
 def accept_trade(
     league_id: str,
     team_key: str,
@@ -618,6 +678,7 @@ def accept_trade(
 
 
 @mcp.tool()
+@safe_tool
 def reject_trade(
     league_id: str,
     team_key: str,
@@ -637,18 +698,6 @@ def reject_trade(
     note = sanitize_trade_note(trade_note)
     tm.reject_trade(transaction_key, note)
     return "Trade rejected."
-
-
-@mcp.tool()
-def get_proposed_trades(league_id: str, team_key: str) -> list[dict]:
-    """Get all proposed trades involving your team.
-
-    Args:
-        league_id: Yahoo league ID.
-        team_key: Your team key.
-    """
-    tm = _get_team(league_id, team_key)
-    return tm.proposed_trades()
 
 
 if __name__ == "__main__":
