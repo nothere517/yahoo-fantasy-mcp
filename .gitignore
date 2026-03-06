@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+*.pyc
+
+# OAuth credentials — NEVER commit
+secrets.json
+oauth*.json
+oauth*.yml
+*.token
+.yahoo_oauth_*
