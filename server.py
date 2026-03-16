@@ -11,6 +11,7 @@ Security notes:
 """
 
 import json
+import logging
 import os
 import re
 import stat
@@ -20,6 +21,9 @@ from pathlib import Path
 from fastmcp import FastMCP
 from yahoo_oauth import OAuth2
 import yahoo_fantasy_api as yfa
+
+# Silence the yahoo_oauth DEBUG logger
+logging.getLogger('yahoo_oauth').setLevel(logging.WARNING)
 
 # --- Constants ---
 CREDS_DIR = Path.home() / ".yahoo-fantasy-mcp"
@@ -162,9 +166,14 @@ _game = None
 
 
 def _get_game():
-    """Initialize Yahoo Fantasy game API, with error handling."""
+    """Initialize Yahoo Fantasy game API, with error handling.
+
+    Refreshes OAuth session if token has expired (3600s TTL).
+    This ensures the session stays valid for long-running CC sessions.
+    """
     global _sc, _game
-    if _game is None:
+    # Reinitialize if no session, or if token has expired
+    if _game is None or (_sc is not None and not _sc.token_is_valid()):
         try:
             _sc = get_oauth_session()
             _game = yfa.Game(_sc, SPORT_CODE)
